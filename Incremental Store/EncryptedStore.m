@@ -17,6 +17,8 @@ typedef sqlite3_stmt sqlite3_statement;
 
 NSString * const EncryptedStoreType = @"EncryptedStore";
 NSString * const EncryptedStorePassphraseKey = @"EncryptedStorePassphrase";
+NSString * const EncryptedStoreCipherSalt = @"EncryptedStoreCipherSalt";
+NSString * const EncryptedStoreCipherPlaintextHeaderSize = @"EncryptedStoreCipherPlaintextHeaderSize";
 NSString * const EncryptedStoreErrorDomain = @"EncryptedStoreErrorDomain";
 NSString * const EncryptedStoreErrorMessageKey = @"EncryptedStoreErrorMessage";
 NSString * const EncryptedStoreDatabaseLocation = @"EncryptedStoreDatabaseLocation";
@@ -862,6 +864,13 @@ static const NSInteger kTableCheckVersion = 1;
             return NO;
         }
         
+        if (![self configureNSSQLitePragmasOption]) {
+            if (error) { *error = [self databaseError]; }
+            sqlite3_close(database);
+            database = NULL;
+            return NO;
+        }
+        
         // invoke vacuum if needed
         if ([self.options[NSSQLiteManualVacuumOption] boolValue]) {
             char *errorMessage = NULL;
@@ -1190,6 +1199,18 @@ static const NSInteger kTableCheckVersion = 1;
 
     result = status == SQLITE_OK;
     
+    NSString *cipherSalt = [[self options] objectForKey:EncryptedStoreCipherSalt];
+    if (result && cipherSalt && ![self configureSQLitePragma:@"cipher_salt" withValue:cipherSalt]) {
+        status = SQLITE_ERROR;
+        result = NO;
+    }
+    
+    NSString *cipherPlaintextHeaderSize = [[self options] objectForKey:EncryptedStoreCipherPlaintextHeaderSize];
+    if (result && cipherPlaintextHeaderSize && ![self configureSQLitePragma:@"cipher_plaintext_header_size" withValue:cipherPlaintextHeaderSize]) {
+        status = SQLITE_ERROR;
+        result = NO;
+    }
+    
     if (result) {
         result = [self checkDatabaseStatusWithError:error];
     }
@@ -1251,6 +1272,34 @@ static const NSInteger kTableCheckVersion = 1;
         result = [self changeDatabasePassphrase:newPassphrase error:error];
     }
     return result && (*error == nil);
+}
+
+-(BOOL)configureNSSQLitePragmasOption
+{
+    NSDictionary *pragmasOption = [[self options] objectForKey:NSSQLitePragmasOption];
+    if (pragmasOption != nil) {
+        for (NSString *pragmaKey in pragmasOption) {
+            NSString *pragmaValue = [pragmasOption objectForKey:pragmaKey];
+            if (![self configureSQLitePragma:pragmaKey withValue:pragmaValue]) {
+                return NO;
+            }
+        }
+    }
+    return YES;
+}
+
+-(BOOL)configureSQLitePragma:(NSString *)pragma withValue:(NSString *)value {
+    NSString *string = [NSString stringWithFormat:@"PRAGMA %@ = %@;", pragma, value];
+    sqlite3_stmt *statement = [self preparedStatementForQuery:string];
+    sqlite3_step(statement);
+    
+    if (statement == NULL || sqlite3_finalize(statement) != SQLITE_OK) {
+        // TO-DO: handle error with statement
+        NSLog(@"Error: statement is NULL or could not be finalized");
+        return NO;
+    }
+    
+    return YES;
 }
 
 -(BOOL)configureDatabaseCacheSize
